@@ -11,8 +11,18 @@ using NLog.Common;
 namespace NLog.AzureLog
 {
     [Target("Azure")]
-    public sealed class Azure: TargetWithLayout
+    public sealed class Azure : TargetWithLayout
     {
+        private static HttpClient _httpClient;
+
+        public Azure()
+        {
+            if (_httpClient == null)
+            {
+                _httpClient = new HttpClient();
+            }
+        }
+
         private static TaskQueue _taskQueue = new TaskQueue(2, 10000);
         [RequiredParameter]
         public string CustomerId { get; set; }
@@ -23,15 +33,7 @@ namespace NLog.AzureLog
         {
             string logMessage = this.Layout.Render(logEvent);
 
-            // Create a hash for the API signature
-            var datestring = DateTime.UtcNow.ToString("r");
-            var jsonBytes = Encoding.UTF8.GetBytes(logMessage);
-            string stringToHash = "POST\n" + jsonBytes.Length + "\napplication/json\n" + "x-ms-date:" + datestring + "\n/api/logs";
-            string hashedString = BuildSignature(stringToHash, this.SharedKey);
-            string signature = "SharedKey " + this.CustomerId + ":" + hashedString;
-
-
-            if (_taskQueue.Queue(() => PostData(signature, datestring, logMessage)))
+            if (_taskQueue.Queue(() => PostData(logMessage)))
             {
                 _taskQueue.ProcessBackground();
             }
@@ -49,29 +51,45 @@ namespace NLog.AzureLog
                 return Convert.ToBase64String(hash);
             }
         }
-        public async Task PostData(string signature, string date, string json)
+        public async Task PostData(string logMessage)
         {
             try
             {
+                // Create a hash for the API signature
+                var datestring = DateTime.UtcNow.ToString("r");
+                var jsonBytes = Encoding.UTF8.GetBytes(logMessage);
+                string stringToHash = "POST\n" + jsonBytes.Length + "\napplication/json\n" + "x-ms-date:" + datestring + "\n/api/logs";
+                string hashedString = BuildSignature(stringToHash, this.SharedKey);
+                string signature = "SharedKey " + this.CustomerId + ":" + hashedString;
+
                 string url = "https://" + CustomerId + ".ods.opinsights.azure.com/api/logs?api-version=2016-04-01";
-
-                System.Net.Http.HttpClient client = new System.Net.Http.HttpClient();
-                client.DefaultRequestHeaders.Add("Accept", "application/json");
-                client.DefaultRequestHeaders.Add("Log-Type", LogName);
-                client.DefaultRequestHeaders.Add("Authorization", signature);
-                client.DefaultRequestHeaders.Add("x-ms-date", date);
-                client.DefaultRequestHeaders.Add("time-generated-field", "");
-
-                System.Net.Http.HttpContent httpContent = new StringContent(json, Encoding.UTF8);
-                httpContent.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-                System.Net.Http.HttpResponseMessage response = await client.PostAsync(new Uri(url), httpContent);
-
-                //System.Net.Http.HttpContent responseContent = response.Content;
-                //string result = responseContent.ReadAsStringAsync().Result;
-                if(response != null && response.StatusCode != System.Net.HttpStatusCode.OK)
+                using (var httpRequestMessage = new HttpRequestMessage(HttpMethod.Post, url))
                 {
-                    InternalLogger.Error("API Post Failed status: " + response.StatusCode.ToString());
-                }
+                    httpRequestMessage.Content = new StringContent
+                        (logMessage, Encoding.UTF8, "application/json");
+                    httpRequestMessage.Headers.Clear();
+                    httpRequestMessage.Headers.Add("Accept", "application/json");
+                    httpRequestMessage.Headers.Add("Log-Type", LogName);
+                    httpRequestMessage.Headers.Add("Authorization", signature);
+                    httpRequestMessage.Headers.Add("x-ms-date", datestring);
+                    httpRequestMessage.Headers.Add("time-generated-field", "");
+                    try
+                    {
+                        HttpResponseMessage response = await _httpClient.SendAsync(httpRequestMessage);
+                        if (response != null && response.StatusCode != System.Net.HttpStatusCode.OK)
+                        {
+                            InternalLogger.Error("API Post Failed status: " + response.StatusCode.ToString());
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine(e);
+                        throw;
+                    }
+                    httpRequestMessage.Dispose();
+                };
+
+
             }
             catch (Exception excep)
             {

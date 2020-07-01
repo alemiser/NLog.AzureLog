@@ -23,7 +23,7 @@ namespace NLog.AzureLog
             }
         }
 
-        private static TaskQueue _taskQueue = new TaskQueue(2, 10000);
+        private static TaskQueue _taskQueue = new TaskQueue(2, 20000);
         [RequiredParameter]
         public string CustomerId { get; set; }
         public string SharedKey { get; set; }
@@ -75,6 +75,7 @@ namespace NLog.AzureLog
                     httpRequestMessage.Headers.Add("time-generated-field", "");
                     try
                     {
+
                         HttpResponseMessage response = await _httpClient.SendAsync(httpRequestMessage);
                         if (response != null && response.StatusCode != System.Net.HttpStatusCode.OK)
                         {
@@ -83,7 +84,7 @@ namespace NLog.AzureLog
                     }
                     catch (Exception e)
                     {
-                        Console.WriteLine(e);
+                        InternalLogger.Error(e.Message);
                         throw;
                     }
                     httpRequestMessage.Dispose();
